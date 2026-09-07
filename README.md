@@ -1,260 +1,703 @@
-# AI-Scholar: A RAG Framework for Research Paper Question Answering
- - Presentation/Demo:- https://drive.google.com/file/d/1SgHN49c0P5W3EmVsCPcTXfBjBo9Kb4b2/view
+# AI-Scholar — Agentic RAG System for Research Paper Q&A
 
-## Team Members:-
- - Adheil Gupta: 23BDS002
- - Arnav Gupta: 23BDS009
- - Atharva Agrawal: 23BDS010
- - Surya Narayana Rao: 23BDS025
- - Tejas Chalwadi: 23BDS063
-  
-## Overview
+AI-Scholar is a research-paper question-answering system built around a **retrieval-augmented generation (RAG)** pipeline. It converts research papers into searchable evidence, retrieves the most relevant evidence for a question, and uses Gemini to generate grounded, citation-backed answers.
 
-- React Native client → Express API (auth + history + SSE proxy) → FastAPI RAG microservice → ChromaDB + Gemini 2.0 Flash.
-- Streaming over Server-Sent Events (SSE) with ordered chunks and a completion message.
-- MongoDB stores users, chat titles, and message history.
-- Supports both speech-to-text queries and text-to-speech playback.
+> **Core idea:** Research papers → searchable evidence → retrieval → reranking → grounded Gemini answer with citations.
 
+## Scope
 
-## Contents
+This README intentionally focuses on the **AI/RAG backend and ingestion pipeline**.
 
-- **frontend/** – Expo React Native app (Android, iOS, Web)
-- **backend/** – Express + TypeScript API (JWT auth, chat history, SSE proxy)
-- **service/** – FastAPI RAG microservice (classification, retrieval, generation)
-- **voice-module/** – Local React Native voice module consumed by the app
+Not part of the main project story:
 
+- React Native UI
+- frontend screens and navigation
+- Firebase authentication
+- MongoDB conversation storage
+- Express middleware and SSE proxying
+- mobile app architecture
+- voice/TTS features
 
-## Architecture
+## End-to-End Architecture
 
-- **Authentication**: The app authenticates with Firebase (phone OTP or Google). The Express backend verifies the Firebase JWT and issues its own JWT for accessing `/chat/*` APIs.
-- **Chat generation**: The mobile client opens an SSE connection to Express `/chat/generate`. Express proxies the request to FastAPI and relays streamed chunks back to the client, preserving order.
-- **RAG**: FastAPI classifies the query, retrieves from ChromaDB, falls back to Semantic Scholar + in-memory FAISS hydration when needed, then streams grounded markdown from Gemini 2.0 Flash.
-- **Persistence**: MongoDB Atlas stores users, chat titles, and per-turn message history.
+### 1. Document ingestion
 
-Chain: React Native → Express (JWT + SSE) → FastAPI (RAG) → ChromaDB/Gemini → SSE back to client.
-
-
-## End-to-End Interaction Flow
-
-1. User logs in via Firebase (phone OTP or Google). Express issues a JWT stored in AsyncStorage.
-2. Mobile client opens an SSE connection to `/chat/generate`, sending the prompt and JWT.
-3. Express forwards the request to FastAPI and relays streamed chunks as they arrive.
-4. FastAPI classifies, retrieves, and generates grounded markdown using Gemini.
-5. Completion triggers chat persistence in MongoDB and refreshes history in the sidebar.
-6. Users can copy responses, start/stop TTS playback, or revisit stored conversations.
-
-
-## RAG Pipeline (FastAPI)
-
-1. **Classify** the incoming question with `gemini-2.5-flash` into one of: specific-to-paper, generic-research, or non-research.
-2. **Retrieve** context from the `research_papers` ChromaDB collection via LangChain using `gemini-embedding-001`.
-3. **Fallback** when context is missing: query Semantic Scholar (search or paper autocomplete). If an open-access PDF is available, download the first ~10 pages, chunk with `RecursiveCharacterTextSplitter`, embed with LangChain FAISS, and run targeted similarity search.
-4. **System prompt** strictly forbids fabrication and enforces the fallback: "Sorry but cannot answer your question at the moment" when evidence is insufficient.
-5. **Stream generation** from `gemini-2.0-flash` back to Express, preserving chunk order and providing a final completion message.
-6. **SSE payloads** to the mobile client use the shape: `{ chunk, finished, chatId?, error? }`.
-
-
-## Ingestion & Knowledge Base
-
-- **Persistent KB**: External ChromaDB HTTP server (`http://localhost:8000`) populated by the in-repo ingestion pipeline (`service/src/ingestion/`). Chunks are ~1k tokens with 200-token overlap; metadata includes title, authors, venue, year, categories, source, DOI/arxiv_id, and a `canonical_id` used for dedupe.
-- **Embeddings**: GoogleGenerativeAiEmbeddingFunction with `gemini-embedding-001`.
-- **Sources**: arXiv (Kaggle bootstrap + OAI-PMH delta), Semantic Scholar bulk search, and authenticated user PDF uploads from the app.
-- **Workers**: RQ + Redis. A separate worker process consumes the `ingestion` queue and processes papers asynchronously; the SQLite ledger at `service/data/ingestion_ledger.sqlite` makes runs resumable.
-- **Live Enrichment**: The specific-paper tool downloads up to 10 PDF pages via Semantic Scholar, chunks with `RecursiveCharacterTextSplitter`, embeds using LangChain FAISS, and answers directly from those slices.
-- **MongoDB Atlas**: Stores users, chat titles, and message history (user/assistant turns with timestamps).
-
-### Ingestion CLI
-
-Run from `service/`:
-
-```bash
-# arXiv bootstrap from Kaggle JSONL dump
-python -m src.ingestion.cli arxiv --bootstrap --kaggle path/to/arxiv-metadata.json.gz --limit 25000
-
-# arXiv OAI-PMH delta sync
-python -m src.ingestion.cli arxiv --oai --since 2025-01-01 --oai-set cs --limit 1000
-
-# Semantic Scholar bulk search
-python -m src.ingestion.cli s2 --query "transformer architecture" --limit 2000 --min-citations 5
-
-# Single local PDF (smoke test, sync)
-python -m src.ingestion.cli ingest-file ./paper.pdf
-
-# RQ worker (in a separate process)
-python -m src.ingestion.cli worker     # or: rq worker ingestion
-
-# Ledger status
-python -m src.ingestion.cli status
+```text
+Document / PDF
+      ↓
+PDF parsing
+      ↓
+Scanned-PDF detection
+      ↓
+Section-aware chunking
+      ↓
+Embedding generation
+      ↓
+ChromaDB
 ```
 
-Add `--sync` to any source command to run inline (skip the queue) for smoke tests.
+### 2. Query answering
 
-
-## Safety & Fidelity
-
-- **Classification** short-circuits non-research prompts.
-- **Generation prompt** mandates markdown structure, inline evidence, and a refusal fallback when retrieval fails.
-- **Express middleware** verifies Firebase-issued JWTs before allowing chat access.
-- **SSE layer** propagates structured errors that the app surfaces to users.
-- **Secrets**: Gemini, Mongo, and JWT secrets live in environment variables; rotate any dev keys before production.
-
-
-## Technologies by Component
-
-- **Mobile app (`frontend/`)**: Expo React Native, Expo Router, Zustand, React Native Paper, `react-native-sse`, `@react-native-voice/voice` (speech input), `react-native-tts` (audio playback), Firebase Auth for OTP + Google sign-in, Axios for REST calls, AsyncStorage for JWT persistence.
-- **Backend API (`backend/`)**: Express + TypeScript, Mongoose, JWT, CORS, dotenv. Endpoints: `/auth/signin`, `/chat/generate` (SSE proxy to FastAPI), `/chat/chats`, `/chat/:id`.
-- **RAG microservice (`FastAPI/`)**: FastAPI, LangChain, Google genai SDK, Semantic Scholar REST, ChromaDB HTTP client, FAISS via LangChain, asyncio streaming.
-- **Voice package (`voice/`)**: Custom React Native module (Android/iOS) for low-latency speech capture.
-- **Data stores**: MongoDB Atlas, ChromaDB HTTP server, ephemeral FAISS vector stores.
-
-
-## Environment Variables
-
-### Backend (`backend/.env`)
-
-- `MONGODB_CONNECTION_STRING` – MongoDB URI
-- `JWT_SECRET` – Secret for signing server-issued JWTs
-- `FASTAPI_BASE_URL` – e.g., `http://localhost:5432`
-
-Example (`backend/.env`):
-
-```
-MONGODB_CONNECTION_STRING="mongodb+srv://user:pass@cluster/yourdb"
-JWT_SECRET="change_me"
-FASTAPI_BASE_URL="http://localhost:5432"
+```text
+User question
+      ↓
+Query classification
+      ↓
+Agent / tool selection
+      ↓
+Internal knowledge-base retrieval
+      ↓
+Semantic Scholar fallback if needed
+      ↓
+Candidate retrieval
+      ↓
+Cross-encoder reranking
+      ↓
+Context construction
+      ↓
+Gemini generation
+      ↓
+Grounded answer + citations
 ```
 
-### Frontend (Expo)
+---
 
-- `EXPO_PUBLIC_BACKEND_URL` – e.g., `http://localhost:3000`
-- `EXPO_PUBLIC_FIREBASE_APIKEY`
-- `EXPO_PUBLIC_FIREBASE_AUTHDOMAIN`
-- `EXPO_PUBLIC_FIREBASE_PROJECTID`
-- `EXPO_PUBLIC_FIREBASE_STORAGEBUCKET`
-- `EXPO_PUBLIC_FIREBASE_MESSAGINGSENDERID`
-- `EXPO_PUBLIC_FIREBASE_APPID`
-- `EXPO_PUBLIC_FIREBASE_MEASUREMENTID`
+# Why RAG?
 
-These map to `frontend/firebase-config.js` and API hooks (e.g., `${process.env.EXPO_PUBLIC_BACKEND_URL}/chat/chats`).
+A normal LLM workflow is:
 
-### FastAPI (`service/.env` — see `service/.env.example`)
-
-- `GEMINI_KEY` – Gemini API key
-- `GEMINI_MODEL` – classifier model (default `gemini-2.5-flash`)
-- `GEMINI_GEN_MODEL` – generation model (default `gemini-2.0-flash`)
-- `GEMINI_EMBED_MODEL` – embedding model (default `gemini-embedding-001`)
-- `CHROMA_HOST`, `CHROMA_PORT`, `CHROMA_COLLECTION` – Chroma HTTP server
-- `REDIS_URL`, `RQ_QUEUE` – ingestion queue
-- `SEMANTIC_SCHOLAR_API_KEY` – optional (higher limits)
-- `UPLOAD_DIR`, `DATA_DIR` – local storage paths (default under `service/data/`)
-- `RERANKER_ENABLED` (default `true`), `RERANKER_MODEL` (default `BAAI/bge-reranker-base`)
-
-
-## Setup & Run (Development)
-
-1) Backend (Express)
-
-```bash
-cd backend
-cp .env.example .env  # if present; otherwise create .env as above
-npm install
-npm run dev           # default port 3000
+```text
+Question → LLM → Answer
 ```
 
-2) RAG Service (FastAPI)
+AI-Scholar uses:
 
-```bash
-cd service
-python -m venv .venv && . .venv/bin/activate  # Unix/macOS: . .venv/bin/activate
-pip install -r requirements.txt
-uvicorn src.app:app --reload --port 5432
+```text
+Question → Retrieve evidence → LLM → Answer
 ```
 
-3) ChromaDB (external server)
+RAG was chosen because the main problem is **accessing and grounding answers in research documents**, not teaching the model new behavior. New papers can be added by parsing, chunking, embedding, and indexing them without retraining the model.
 
-- Ensure a Chroma HTTP server runs at `http://localhost:8000` and the KB is seeded.
+RAG reduces hallucination risk by providing evidence, but it does not guarantee that every generated statement is correct.
 
-4) Frontend (Expo)
+---
 
-```bash
-cd frontend
-npm install
-npx expo start
+# Document Ingestion
+
+## PDF parsing
+
+Research papers are converted into text before indexing. Text is extracted page by page so individual page failures can be isolated instead of crashing the whole ingestion process.
+
+PDFs are difficult because they can contain:
+
+- multi-column layouts
+- tables
+- figures
+- equations
+- unusual reading order
+- scanned pages
+
+### Scanned PDFs
+
+The current implementation uses a lightweight heuristic based on the amount of extracted text. PDFs with insufficient extractable text are treated as likely scanned.
+
+Current v1 behavior:
+
+```text
+Scanned / poorly extracted PDF → skipped_ocr
 ```
 
-5) Voice module
+OCR and layout-aware parsing are future improvements.
 
-- The app depends on the local tarball `../voice-module/react-native-voice-voice-3.2.4.tgz`. Ensure it exists and installs.
+---
 
+# Section-Aware Chunking
 
-## API and Streaming
+A full research paper is too large and unfocused to use as one retrieval unit.
 
-- **Express (`backend/`)**
-  - `POST /api/v1/auth/login` → `{ token }`
-  - `GET /api/v1/chat/chats` (Bearer token)
-  - `POST /api/v1/chat/generate` (SSE proxy to FastAPI) → streams `{ chunk, finished }`
-  - `POST /api/v1/chat/:cId` (Direct Gemini generation + Persistence) → streams `{ chunk, finished, chatId, title }`
-  - `GET /api/v1/chat/:cId` → Fetch full chat history for a specific conversation
+The pipeline uses two stages:
 
-- **RAG Service (`service/`)**
-  - `POST /fastapi/chat/generate` (internal) → streams model output consumed by Express
-  - `POST /fastapi/ingest/upload` → accept a multipart PDF, enqueue ingestion, return `{ job_id, canonical_id }`
-  - `GET  /fastapi/ingest/status/{job_id}` → RQ + ledger status for a queued ingestion
-  - `GET  /fastapi/ingest/ledger` → recent ledger rows + counts
-  - `GET  /fastapi/eval/run` → retrieval benchmark (hit@5, MRR@10, p50/p95 latency)
+1. **Section-aware splitting** using research-paper structure such as Introduction, Methods, Results, Discussion, and Conclusion.
+2. **Recursive splitting** inside large sections.
 
-- **Backend additions for ingestion**
-  - `POST /api/v1/papers/upload` (Bearer token, multipart PDF) → proxies to FastAPI ingest
-  - `GET  /api/v1/papers/status/:jobId` → proxies to FastAPI ingest status
+Current configuration is approximately:
 
-SSE payload envelope:
-
-```json
-{ "chunk": "text", "finished": false, "chatId": "optional", "error": null }
+```text
+Chunk size: 1000
+Chunk overlap: 200
 ```
 
+Section-aware chunking preserves useful document structure. Recursive splitting keeps sections manageable for embedding and retrieval.
 
-## Troubleshooting
+Overlap reduces the chance that important information is lost at chunk boundaries.
 
-- Android mic permissions: ensure they are declared and granted.
-- React Native TTS: known issue/fix – https://github.com/ak1394/react-native-tts/pull/274
-- Expo env: ensure `EXPO_PUBLIC_*` variables are present when running `expo start`.
-- Default ports: Backend `3000`, FastAPI `5432`, Chroma `8000`.
+The values are practical starting points and should be tuned experimentally rather than treated as universally optimal.
 
+### Other chunking approaches
 
-## Current Gaps & Roadmap
+- Fixed-size chunking — simple but can break logical structure.
+- Recursive chunking — uses natural separators such as paragraphs and sentences.
+- Semantic chunking — groups semantically related content but is more complex.
+- Structure-aware chunking — uses headings, sections, pages, or layout.
 
-- Hybrid retrieval (BM25 + vector) is intentionally deferred; reranker covers most of the gap until a corpus migration to a BM25-capable store.
-- Full-text ingestion is capped at abstract + intro + first ~3 sections per paper to control embedding cost; expand once eval shows it's needed.
-- Scanned PDFs are skipped (`status=skipped_ocr`); OCR is out of scope for v1.
-- Multilingual retrieval relies on Gemini embeddings; UI translations not implemented.
-- Model comparisons (multi-LLM) are out of scope for the current implementation.
+---
 
+# Embeddings
 
-## Outputs Surfaced to Users
+An embedding converts text into a numerical vector representing semantic meaning.
 
-- Markdown-formatted assistant response (<300 words) with inline citations or explicit fallback.
-- Chat history (latest 10 chats + full conversation on selection).
-- Optional audio playback per message, plus speech transcript capture on new prompts.
-- Error toasts when FastAPI raises retrieval or generation failures.
+Example:
 
-
-## Repository Structure
-
+```text
+"How does transformer attention work?"
 ```
+
+and
+
+```text
+"Explain the attention mechanism in transformers"
+```
+
+use different wording but should be semantically related in embedding space.
+
+AI-Scholar uses Gemini embeddings for:
+
+```text
+Document chunk → embedding vector → ChromaDB
+```
+
+and at query time:
+
+```text
+User question → embedding vector → similarity search
+```
+
+Semantic retrieval is useful because research questions often use wording different from the source paper.
+
+---
+
+# ChromaDB
+
+ChromaDB is the **primary persistent knowledge base**.
+
+Each stored record contains:
+
+- chunk text
+- embedding
+- metadata
+
+Important metadata includes:
+
+- canonical paper ID
+- title
+- authors
+- source
+- chunk index
+- section heading
+- DOI
+- arXiv ID
+- Semantic Scholar ID
+- venue
+- year
+- categories
+- URL
+
+Metadata provides provenance, helps debugging, supports filtering, and enables citation construction.
+
+---
+
+# Deduplication and Idempotency
+
+The same paper may appear through multiple sources. AI-Scholar creates a deterministic canonical identity with priority:
+
+```text
+DOI
+ ↓
+arXiv ID
+ ↓
+Semantic Scholar ID
+ ↓
+Title + first-author hash
+```
+
+The title-author hash is only a fallback heuristic.
+
+Chunk IDs are deterministic:
+
+```text
+canonical_id#chunk_0
+canonical_id#chunk_1
+...
+```
+
+Combined with upsert-style storage, this makes ingestion **idempotent**: retrying the same paper should not create duplicate chunk copies.
+
+---
+
+# Asynchronous Ingestion
+
+PDF ingestion can involve parsing, chunking, embedding, and vector storage, so it should not block normal query requests.
+
+The ingestion path uses:
+
+- Redis
+- RQ workers
+- an ingestion queue
+
+```text
+Upload
+  ↓
+Validate
+  ↓
+Create / identify paper
+  ↓
+Enqueue job
+  ↓
+Background worker
+  ↓
+Parse → chunk → embed → store
+```
+
+The prototype also maintains an ingestion ledger with states such as:
+
+```text
+queued
+processing
+done
+failed
+skipped_ocr
+```
+
+RQ tracks the background job; the ledger tracks the paper-level business state.
+
+SQLite is used for the prototype ledger. A production version would use a shared relational database such as PostgreSQL.
+
+---
+
+# Query Classification
+
+Incoming questions are classified as:
+
+```text
+1. specific-to-paper
+2. generic-research
+3. non-research
+```
+
+Examples:
+
+- Specific-to-paper: “What does the 2021 paper by Smith conclude about memory?”
+- Generic-research: “How does transformer attention work?”
+- Non-research: “Write me a poem.”
+
+Classification prevents every prompt from following the same retrieval path and helps select the correct tools.
+
+The current implementation uses Gemini for natural-language classification. A production system could combine deterministic rules with an LLM or lightweight classifier.
+
+---
+
+# Constrained Agentic RAG
+
+AI-Scholar uses a **constrained agentic tool-selection layer**, not a fully autonomous agent.
+
+For research queries, the system can choose from controlled tools such as:
+
+```text
+Internal KB retrieval
+Semantic Scholar search
+Specific-paper search
+```
+
+The agent's role is to select an appropriate information source while keeping the available tools and workflow bounded.
+
+The general strategy is:
+
+```text
+Internal knowledge base first
+        ↓
+External academic fallback when needed
+```
+
+---
+
+# Retrieval
+
+## Stage 1: Vector retrieval
+
+The query is embedded and searched against ChromaDB.
+
+```text
+Query
+  ↓
+Embedding
+  ↓
+ChromaDB similarity search
+  ↓
+Top ~20 candidate chunks
+```
+
+The first stage prioritizes recall: finding a broad set that hopefully contains the relevant evidence.
+
+## Stage 2: Cross-encoder reranking
+
+The candidates are reranked using a cross-encoder.
+
+Conceptually:
+
+```text
+[Query + candidate chunk] → relevance score
+```
+
+The pipeline becomes:
+
+```text
+Top ~20 candidates
+      ↓
+Cross-encoder reranker
+      ↓
+Top ~5 context chunks
+```
+
+This follows a two-stage retrieval strategy:
+
+```text
+Cheap broad retrieval
+        ↓
+More expensive precise reranking
+```
+
+The reranker is not applied to the entire database because scoring every query-document pair would be too expensive.
+
+If the reranker fails, the system can degrade gracefully by returning the original vector-retrieval order.
+
+---
+
+# Semantic Scholar Fallback
+
+The internal knowledge base may not contain the requested paper or enough useful evidence.
+
+Semantic Scholar is used as an academic fallback source for:
+
+- paper metadata
+- academic search
+- specific-paper lookup
+- open-access paper discovery
+
+If an open-access PDF is available, the fallback path can create a temporary in-memory FAISS index from extracted content for targeted retrieval.
+
+## ChromaDB vs FAISS
+
+They have different roles:
+
+```text
+ChromaDB → persistent primary knowledge base
+FAISS    → temporary in-memory fallback retrieval
+```
+
+They are not two competing primary databases.
+
+---
+
+# Context Construction and Citations
+
+After reranking, the selected chunks are formatted as focused context for Gemini.
+
+Each chunk carries source metadata and citation markers, conceptually:
+
+```text
+[^1] Paper Title
+Author | Year | URL
+
+Retrieved evidence...
+```
+
+The generation model receives actual retrieved evidence rather than only document identifiers.
+
+If evidence is insufficient, the intended behavior is a controlled fallback instead of inventing an unsupported answer.
+
+---
+
+# Evaluation
+
+The retrieval benchmark measures:
+
+- **Hit@5**
+- **MRR@10**
+- **p50 latency**
+- **p95 latency**
+
+## Hit@5
+
+> Did the relevant paper appear anywhere in the top 5 results?
+
+## MRR@10
+
+Measures how high the first relevant result appears.
+
+```text
+Rank 1 → 1
+Rank 2 → 1/2
+Rank 3 → 1/3
+Not in top 10 → 0
+```
+
+The average reciprocal rank is calculated across benchmark queries.
+
+## Latency
+
+```text
+p50 → typical latency
+p95 → slower tail latency
+```
+
+The current benchmark primarily evaluates retrieval quality and latency. A stronger end-to-end evaluation would also measure:
+
+- answer correctness
+- groundedness
+- citation correctness
+- citation completeness
+- insufficient-evidence behavior
+
+---
+
+# Failure Handling
+
+The system has multiple possible failure points:
+
+```text
+Download
+   ↓
+PDF parsing
+   ↓
+Chunking
+   ↓
+Embeddings
+   ↓
+Vector storage
+   ↓
+Retrieval
+   ↓
+Reranking
+   ↓
+Generation
+```
+
+Failures should be isolated as close as possible to their source.
+
+Examples:
+
+- Poor PDF extraction → controlled ingestion status.
+- Scanned PDF → `skipped_ocr`.
+- Queue failure → prototype synchronous fallback.
+- Reranker failure → use vector retrieval order.
+- External API failure → bounded retries and controlled errors.
+- Missing evidence → fallback/refusal rather than fabrication.
+
+A production system should clearly distinguish:
+
+```text
+No relevant result
+```
+
+from:
+
+```text
+Dependency unavailable
+```
+
+because these are operationally different failures.
+
+---
+
+# Debugging a Bad Answer
+
+A bad RAG answer should be debugged backward through the pipeline:
+
+```text
+Bad answer
+    ↓
+Was the context correct?
+    ↓
+Was reranking correct?
+    ↓
+Was relevant evidence retrieved?
+    ↓
+Was chunking appropriate?
+    ↓
+Was PDF extraction correct?
+```
+
+This separates:
+
+```text
+Retrieval failure
+```
+
+from:
+
+```text
+Generation failure
+```
+
+For example, if the correct evidence was never retrieved, the issue is retrieval. If the correct evidence was given to Gemini but the answer is still wrong, the issue is generation or prompt behavior.
+
+---
+
+# Technology Stack
+
+## Core
+
+- Python
+- FastAPI
+
+## RAG and orchestration
+
+- LangChain
+- Gemini / Google GenAI SDK
+
+## Vector retrieval
+
+- ChromaDB
+- FAISS
+
+## Reranking
+
+- Cross-encoder
+- `BAAI/bge-reranker-base`
+
+## Background processing
+
+- Redis
+- RQ
+
+## Research sources
+
+- Semantic Scholar
+- arXiv
+
+## Prototype ingestion state
+
+- SQLite
+
+---
+
+# Why These Technologies?
+
+### Python
+
+Strong ecosystem for AI, NLP, vector retrieval, and API development.
+
+### FastAPI
+
+Lightweight Python API framework with validation and async support.
+
+### LangChain
+
+Used mainly for tool/agent abstraction and retrieval integration. RAG itself could also be implemented directly in Python.
+
+### ChromaDB
+
+Persistent vector storage with metadata support and straightforward semantic retrieval.
+
+### FAISS
+
+Efficient temporary in-memory vector search for fallback scenarios.
+
+### Redis + RQ
+
+Moves expensive ingestion work off the normal request path using Python background workers.
+
+### Cross-encoder reranker
+
+Improves precision when vector similarity returns chunks that are related to the topic but do not directly answer the question.
+
+---
+
+# Production Scaling Direction
+
+A larger deployment would separate query serving and ingestion workers so they can scale independently:
+
+```text
+             Load Balancer
+                  ↓
+           FastAPI Instances
+                  ↓
+       ┌──────────┴──────────┐
+       ↓                     ↓
+Query / Retrieval      Ingestion Queue
+       ↓                     ↓
+Vector Store          Worker Pool
+                            ↓
+                    Parse / Embed / Store
+```
+
+Possible improvements:
+
+- horizontally scaled API instances
+- worker scaling based on queue depth
+- ANN/vector indexing for larger corpora
+- caching
+- rate limiting
+- bounded retries with backoff
+- object storage for PDFs
+- PostgreSQL for shared ingestion state
+- monitoring and tracing
+- hybrid BM25 + vector retrieval
+
+---
+
+# Security Consideration: Prompt Injection
+
+Retrieved document content should be treated as **untrusted data**, not as instructions.
+
+The generation layer should clearly separate:
+
+```text
+System instructions
+```
+
+from:
+
+```text
+Retrieved paper content
+```
+
+A malicious document should not be able to redefine system behavior or tool permissions.
+
+---
+
+# Current Limitations and Future Improvements
+
+- Scanned PDFs are currently skipped; OCR is future work.
+- Hybrid retrieval (BM25 + vector search) is not part of the current primary pipeline.
+- The benchmark focuses on retrieval quality and latency rather than full end-to-end answer correctness.
+- Prototype ingestion state uses SQLite.
+- Production storage, observability, retries, and distributed scaling would need further work.
+
+---
+
+# Repository Structure
+
+```text
 AI-Scholar/
-├─ backend/       # Express + TypeScript (Auth & Proxy)
-├─ service/       # FastAPI + LangChain (RAG Pipeline)
-├─ frontend/      # Expo React Native (Mobile App)
-├─ voice-module/  # Native Voice Integration
-└─ project.md     # Detailed Specs & Updates
+│
+├── service/
+│   ├── src/
+│   │   ├── ingestion/       # Paper ingestion pipeline
+│   │   ├── retrieval/       # Retrieval and fallback logic
+│   │   ├── agents/          # Classification and tool selection
+│   │   ├── evaluation/      # Retrieval benchmark
+│   │   └── app.py           # FastAPI application
+│   │
+│   └── data/
+│       └── ingestion_ledger.sqlite
+│
+├── README.md
+└── project.md
 ```
 
-## What's New in v2
+---
 
-Compared to v1, this release includes:
-- **End-to-End RAG Service**: A new FastAPI pipeline with Gemini-powered query classification, ChromaDB retrieval, and Semantic Scholar fallbacks.
-- **Real-time Chat Persistence**: Express now proxies SSE responses and saves each turn in MongoDB for history replay.
-- **Voice-First Interaction**: Integrated native voice capture (`@react-native-voice/voice`) and TTS playback for hands-free use.
-- **Secure Auth Flow**: Firebase phone OTP + Google sign-in wired into backend JWT issuance.
-- **Mobile UX Overhaul**: Polished chat UI with markdown rendering, dark mode, and improved navigation (Drawer + Tabs).
+# One-Line Summary
+
+> **AI-Scholar is an agentic RAG system that converts research papers into searchable evidence, retrieves and reranks the most relevant evidence for a question, and uses Gemini to generate grounded, citation-backed answers.**
