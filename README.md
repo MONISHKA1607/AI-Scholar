@@ -4,20 +4,6 @@ AI-Scholar is a research-paper question-answering system built around a **retrie
 
 > **Core idea:** Research papers → searchable evidence → retrieval → reranking → grounded Gemini answer with citations.
 
-## Scope
-
-This README intentionally focuses on the **AI/RAG backend and ingestion pipeline**.
-
-Not part of the main project story:
-
-- React Native UI
-- frontend screens and navigation
-- Firebase authentication
-- MongoDB conversation storage
-- Express middleware and SSE proxying
-- mobile app architecture
-- voice/TTS features
-
 ## End-to-End Architecture
 
 ### 1. Document ingestion
