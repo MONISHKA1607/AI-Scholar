@@ -681,9 +681,3 @@ AI-Scholar/
 ├── README.md
 └── project.md
 ```
-
----
-
-# One-Line Summary
-
-> **AI-Scholar is an agentic RAG system that converts research papers into searchable evidence, retrieves and reranks the most relevant evidence for a question, and uses Gemini to generate grounded, citation-backed answers.**
