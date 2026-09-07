@@ -1,0 +1,22 @@
+{
+  "include": [
+    "service/src"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "service/venv3.12"
+  ],
+  "venvPath": "service",
+  "venv": "venv3.12",
+  "pythonVersion": "3.12",
+  "verboseOutput": true,
+  "executionEnvironments": [
+    {
+      "root": "service/src",
+      "extraPaths": [
+        "service/src"
+      ]
+    }
+  ]
+}

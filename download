@@ -1,0 +1,67 @@
+# ---- Project data (heavy / generated) ----
+# Kaggle arXiv dump (~5 GB), ChromaDB persistence, SQLite ledger, uploads
+/data/
+/service/data/
+/checkpoint
+run.txt
+
+# ---- Secrets ----
+.env
+.env.*
+# keep templates committed
+!.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.jks
+*.mobileprovision
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+venv*/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Node / TypeScript ----
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# ---- Expo / RN ----
+.expo/
+web-build/
+expo-env.d.ts
+.metro-health-check*
+
+# ---- Native build caches (voice-module) ----
+**/.gradle/
+**/.cxx/
+*.orig.*
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+.DS_Store
+**/.DS_Store
+Thumbs.db
+*.swp
+
+# ---- Claude Code workspace ----
+.claude/
+CLAUDE.md
+
+# ---- Logs ----
+*.log
+logs/

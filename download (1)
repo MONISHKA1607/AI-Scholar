@@ -1,0 +1,9 @@
+frontend/ios
+frontend/android
+frontend/.expo
+backend/node_modules
+backend/dist
+backend/build
+backend/.env
+backend/.env.example
+backend/.env.local
