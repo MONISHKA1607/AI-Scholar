@@ -1,0 +1,10 @@
+{"id": "att-is-all-you-need", "question": "What is the core idea behind the Transformer architecture introduced by Vaswani et al.?", "expected_arxiv_id": "1706.03762", "category": "cs.LG"}
+{"id": "bert", "question": "How does BERT's masked language modeling objective differ from left-to-right language modeling?", "expected_arxiv_id": "1810.04805", "category": "cs.CL"}
+{"id": "resnet", "question": "Why do residual connections help train very deep neural networks?", "expected_arxiv_id": "1512.03385", "category": "cs.CV"}
+{"id": "gan", "question": "What is the minimax objective in the original GAN formulation?", "expected_arxiv_id": "1406.2661", "category": "cs.LG"}
+{"id": "adam", "question": "How does the Adam optimizer combine momentum and adaptive learning rates?", "expected_arxiv_id": "1412.6980", "category": "cs.LG"}
+{"id": "dropout", "question": "What problem does dropout regularization address in neural networks?", "expected_arxiv_id": "1207.0580", "category": "cs.NE"}
+{"id": "word2vec", "question": "How does the skip-gram model in word2vec learn word embeddings?", "expected_arxiv_id": "1310.4546", "category": "cs.CL"}
+{"id": "vit", "question": "How does the Vision Transformer apply self-attention to image patches?", "expected_arxiv_id": "2010.11929", "category": "cs.CV"}
+{"id": "alphago", "question": "What role does Monte Carlo Tree Search play in AlphaGo?", "expected_arxiv_id": "1712.01815", "category": "cs.AI"}
+{"id": "clip", "question": "How does CLIP learn joint image-text representations through contrastive learning?", "expected_arxiv_id": "2103.00020", "category": "cs.CV"}
